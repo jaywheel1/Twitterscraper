@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import base64
 from datetime import datetime
-import snscrape.modules.twitter as sntwitter
-import time
+import requests
+import json
 
 st.set_page_config(page_title="Twitter Profile Scraper", page_icon="🐦")
 
@@ -14,49 +14,74 @@ st.write("Enter a Twitter username to scrape their recent tweets")
 username = st.text_input("Twitter Username (without @)", value="")
 num_tweets = st.slider("Number of tweets to scrape", min_value=5, max_value=100, value=20)
 
+# Simplified approach using nitter.net as a Twitter frontend
 def scrape_profile(username, num_tweets=50):
-    """Scrape tweets from a specified Twitter/X profile using snscrape."""
-    # Initialize progress bar
+    """Scrape tweets from a Twitter profile using a public API"""
     progress_bar = st.progress(0)
     status_text = st.empty()
-    
-    tweets = []
-    query = f"from:{username}"
-    
     status_text.text(f"Fetching tweets from @{username}...")
     
-    # Create a generator for the tweets
-    tweets_generator = sntwitter.TwitterSearchScraper(query).get_items()
+    tweets = []
     
-    # Collect tweets
     try:
-        for i, tweet in enumerate(tweets_generator):
+        # Use a public API that provides Twitter data
+        # Note: This is a demonstration API and might have rate limits
+        api_url = f"https://api.allorigins.win/raw?url=https://nitter.net/{username}/rss"
+        
+        response = requests.get(api_url)
+        
+        if response.status_code != 200:
+            st.error(f"Error: Could not fetch data for @{username}")
+            return []
+        
+        # Parse the XML response
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(response.content)
+        
+        # Find all items (tweets)
+        items = root.findall(".//item")
+        
+        # Extract data from each tweet
+        for i, item in enumerate(items[:num_tweets]):
             if i >= num_tweets:
                 break
                 
             # Update progress
             progress = min((i + 1) / num_tweets, 0.99)
             progress_bar.progress(progress)
-            status_text.text(f"Collected {i + 1} of {num_tweets} tweets...")
+            status_text.text(f"Processing {i + 1} of {num_tweets} tweets...")
             
-            tweet_data = {
-                'text': tweet.content,
-                'timestamp': tweet.date.strftime('%Y-%m-%d %H:%M:%S'),
-                'replies': tweet.replyCount,
-                'retweets': tweet.retweetCount,
-                'likes': tweet.likeCount
-            }
-            
-            tweets.append(tweet_data)
-            
-            # Small delay to avoid rate limiting
-            time.sleep(0.1)
-        
+            try:
+                # Get the tweet content (remove the username part)
+                full_text = item.find("title").text
+                text = full_text.split(":", 1)[1].strip() if ":" in full_text else full_text
+                
+                # Get the timestamp
+                pub_date = item.find("pubDate").text
+                timestamp = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %Z").strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Get the link (which contains the tweet ID)
+                link = item.find("link").text
+                tweet_id = link.split("/")[-1]
+                
+                tweet_data = {
+                    "text": text,
+                    "timestamp": timestamp,
+                    "link": link,
+                    "tweet_id": tweet_id
+                }
+                
+                tweets.append(tweet_data)
+                
+            except Exception as e:
+                st.warning(f"Error processing a tweet: {str(e)}")
+                continue
+                
         progress_bar.progress(1.0)
         status_text.text(f"Successfully collected {len(tweets)} tweets!")
         
     except Exception as e:
-        st.error(f"Error scraping tweets: {str(e)}")
+        st.error(f"Error: {str(e)}")
         
     return tweets
 
@@ -92,7 +117,8 @@ if st.button("Scrape Tweets"):
 st.markdown("---")
 st.markdown("""
 ### 📝 Notes:
-- This tool uses web scraping to collect tweets from public Twitter/X profiles.
+- This tool uses Nitter's RSS feed to collect tweets from public Twitter/X profiles.
 - Please use responsibly and respect Twitter's terms of service.
-- Twitter/X may change their website structure which could cause this tool to stop working.
+- Limited data is available through this method (no like/retweet counts).
+- Twitter/X may change their site structure which could cause this tool to stop working.
 """)
